@@ -1,10 +1,12 @@
 # Crossword Flashcards
 
-A mobile PWA for learning the 100 most common NYT crossword answers
-(crosswordese like ERA, AREA, ERE, ONE, ELI…), with clue-style definitions.
+A mobile PWA for learning the 220+ most common NYT crossword answers
+(crosswordese like ERA, AREA, ERE, ONE, ELI…), each with a definition written
+in authentic crossword-clue style. Answers are ordered by real all-time NYT
+frequency, so the highest-impact words come first.
 
-Word frequencies inspired by Noah Veltman's NYT crossword analysis
-(noahveltman.com/crossword).
+Word frequencies from danvk.org's NYT crossword analysis (all-time answer
+counts); see `build_words.py`, which generates the list in `index.html`.
 
 ## Features
 - **Flashcards** — tap to flip, both directions, shuffle, mark-hard.
