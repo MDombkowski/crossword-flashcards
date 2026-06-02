@@ -65,6 +65,28 @@
   .opt:disabled{opacity:1}
   .feedback{text-align:center;min-height:22px;margin-top:12px;font-weight:600}
 
+  /* crossword spell mode */
+  .cwclue{font-size:21px;text-align:center;margin:18px 8px 4px;line-height:1.35}
+  .cwlen{text-align:center;color:var(--muted);font-size:12px;letter-spacing:1px;text-transform:uppercase;margin-bottom:16px}
+  .cwwrap{position:relative;display:flex;justify-content:center;margin:6px 0}
+  .cwboxes{display:flex;gap:7px;flex-wrap:wrap;justify-content:center;max-width:100%}
+  .cbox{
+    width:46px;height:54px;border:2px solid var(--panel2);border-radius:9px;
+    background:var(--panel);display:flex;align-items:center;justify-content:center;
+    font-size:28px;font-weight:700;text-transform:uppercase;transition:border-color .1s,background .1s;
+  }
+  .cbox.active{border-color:var(--accent2);box-shadow:0 0 0 3px rgba(59,130,246,.25)}
+  .cbox.revealed{color:var(--hard)}
+  .cbox.good{border-color:var(--good);background:rgba(34,197,94,.18)}
+  .cbox.bad{border-color:var(--bad);background:rgba(239,68,68,.14)}
+  /* invisible input overlaid on the boxes: captures typing + raises keyboard on tap */
+  .cw-capture{
+    position:absolute;inset:0;width:100%;height:100%;
+    opacity:0;border:none;background:transparent;color:transparent;
+    font-size:16px;caret-color:transparent;text-align:center;
+  }
+  .cwfeedback{text-align:center;min-height:22px;margin-top:16px;font-weight:600}
+
   /* stats */
   .summary{display:flex;gap:8px;margin:8px 0}
   .stat{flex:1;background:var(--panel);border-radius:12px;padding:12px;text-align:center}
@@ -136,6 +158,24 @@
     </div>
   </section>
 
+  <!-- SPELL (crossword entry) -->
+  <section id="tab-spell" class="tab">
+    <div class="cwclue" id="cwClue"></div>
+    <div class="cwlen" id="cwLen"></div>
+    <div class="cwwrap">
+      <div class="cwboxes" id="cwBoxes"></div>
+      <input id="cwInput" class="cw-capture" type="text" inputmode="text"
+             autocapitalize="characters" autocomplete="off" autocorrect="off"
+             spellcheck="false" aria-label="Type the answer">
+    </div>
+    <div class="cwfeedback" id="cwFeedback"></div>
+    <div class="row">
+      <button id="cwHint">💡 Hint</button>
+      <button id="cwShow">Show answer</button>
+      <button id="cwSkip">Skip ▶</button>
+    </div>
+  </section>
+
   <!-- STATS -->
   <section id="tab-stats" class="tab">
     <div class="summary">
@@ -153,6 +193,7 @@
 <nav id="nav">
   <button data-tab="cards" class="on">Cards</button>
   <button data-tab="quiz">Quiz</button>
+  <button data-tab="spell">Spell</button>
   <button data-tab="stats">Stats</button>
 </nav>
 
@@ -432,6 +473,10 @@ document.querySelectorAll("#nav button").forEach(b=>{
     document.querySelectorAll(".tab").forEach(s=>s.classList.remove("active"));
     $("tab-"+tab).classList.add("active");
     if(tab==="stats") renderStats();
+    if(tab==="spell"){
+      if(!cwAnswer || cwSolved) newSpell(); else renderBoxes();
+      $("cwInput").focus();   // user-gesture focus -> raises mobile keyboard
+    }
   };
 });
 
@@ -590,6 +635,109 @@ $("resetBtn").onclick = ()=>{
     renderCard();
   }
 };
+
+/* ---------- spell (crossword entry) ---------- */
+let cwAnswer = null;     // current {w,c}
+let cwSolved = false;
+let cwReveal = 0;        // how many leading letters are revealed as hints
+
+function newSpell(){
+  cwAnswer = weightedPick();
+  cwSolved = false;
+  cwReveal = 0;
+  const n = cwAnswer.w.length;
+  const inp = $("cwInput");
+  inp.value = "";
+  inp.maxLength = n;
+  $("cwClue").textContent = cwAnswer.c;
+  $("cwLen").textContent = n + (n === 1 ? " letter" : " letters");
+  $("cwFeedback").textContent = "";
+  $("cwShow").disabled = false;
+  $("cwHint").disabled = false;
+  buildBoxes();
+  renderBoxes();
+}
+
+function buildBoxes(){
+  const wrap = $("cwBoxes");
+  wrap.innerHTML = "";
+  for(let i=0;i<cwAnswer.w.length;i++){
+    const d = document.createElement("div");
+    d.className = "cbox";
+    wrap.appendChild(d);
+  }
+}
+
+function cwValue(){
+  return $("cwInput").value.toUpperCase().replace(/[^A-Z]/g,"").slice(0, cwAnswer.w.length);
+}
+
+function renderBoxes(state){
+  const v = cwValue();
+  const boxes = $("cwBoxes").children;
+  for(let i=0;i<boxes.length;i++){
+    const b = boxes[i];
+    b.textContent = v[i] || "";
+    b.className = "cbox";
+    if(i < cwReveal) b.classList.add("revealed");
+    if(state) b.classList.add(state);                       // good / bad flash
+    else if(!cwSolved && i === v.length) b.classList.add("active");
+  }
+}
+
+function checkSpell(){
+  const v = cwValue();
+  if(v.length < cwAnswer.w.length) return;
+  if(v === cwAnswer.w){
+    cwSolved = true;
+    if(cwReveal < cwAnswer.w.length){ rec(cwAnswer.w).right++; saveState(); }  // not a full give-up
+    renderBoxes("good");
+    $("cwFeedback").innerHTML = '<span style="color:var(--good)">Correct! ✓</span>';
+    setTimeout(()=>{ if(cwSolved){ newSpell(); $("cwInput").focus(); } }, 850);  // auto-advance, keep keyboard
+  } else {
+    renderBoxes("bad");
+    $("cwFeedback").innerHTML = '<span style="color:var(--bad)">Not quite — keep trying</span>';
+  }
+}
+
+$("cwInput").addEventListener("input", ()=>{
+  const inp = $("cwInput");
+  let v = cwValue();
+  // keep the revealed prefix locked in
+  if(cwReveal > 0){
+    const prefix = cwAnswer.w.slice(0, cwReveal);
+    if(!v.startsWith(prefix)) v = prefix + v.slice(prefix.length);
+  }
+  inp.value = v;                 // normalize (uppercase, letters only)
+  if(!cwSolved) $("cwFeedback").textContent = "";
+  renderBoxes();
+  if(v.length === cwAnswer.w.length) checkSpell();
+});
+// Enter key also checks
+$("cwInput").addEventListener("keydown", (e)=>{ if(e.key === "Enter") checkSpell(); });
+
+$("cwHint").onclick = ()=>{
+  if(cwSolved || cwReveal >= cwAnswer.w.length) return;
+  cwReveal++;
+  const inp = $("cwInput");
+  const tail = cwValue().slice(cwReveal);
+  inp.value = (cwAnswer.w.slice(0, cwReveal) + tail).slice(0, cwAnswer.w.length);
+  renderBoxes();
+  $("cwInput").focus();
+  if(cwValue().length === cwAnswer.w.length) checkSpell();
+};
+
+$("cwShow").onclick = ()=>{
+  if(cwSolved) return;
+  cwSolved = true;
+  cwReveal = cwAnswer.w.length;
+  $("cwInput").value = cwAnswer.w;
+  rec(cwAnswer.w).wrong++; saveState();
+  renderBoxes();
+  $("cwFeedback").innerHTML = '<span style="color:var(--hard)">'+cwAnswer.w+' — '+cwAnswer.c+'</span>';
+};
+
+$("cwSkip").onclick = ()=>{ newSpell(); $("cwInput").focus(); };
 
 /* ---------- boot ---------- */
 renderCard();
