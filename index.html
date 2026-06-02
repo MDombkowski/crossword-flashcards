@@ -101,6 +101,25 @@
   .wrow .cnt{font-size:12px;color:var(--muted);width:74px;text-align:right;flex:0 0 auto}
   .wrow .h{color:var(--hard)}
 
+  /* dictionary button + modal */
+  button.define{background:transparent;border:1.5px solid var(--panel2);color:var(--accent2)}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:flex-end;z-index:50}
+  .modal[hidden]{display:none}
+  .sheet{
+    background:var(--panel);width:100%;max-height:75vh;overflow-y:auto;
+    border-radius:18px 18px 0 0;padding:16px 18px calc(18px + env(safe-area-inset-bottom));
+    box-shadow:0 -8px 24px rgba(0,0,0,.45);
+  }
+  .sheetHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+  #defWord{font-size:26px;font-weight:700;letter-spacing:1px}
+  #defClose{background:var(--panel2);border-radius:50%;width:34px;height:34px;padding:0;font-size:16px;line-height:1}
+  .defPhon{color:var(--muted);font-size:14px;margin-bottom:6px}
+  .defPos{color:var(--accent2);font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.5px;margin:12px 0 4px}
+  .defList{margin:0;padding-left:20px}
+  .defList li{margin:5px 0;line-height:1.4}
+  .defMsg{padding:10px 0;line-height:1.5}
+  .muted{color:var(--muted)}
+
   /* bottom nav */
   nav{
     display:flex;background:var(--panel);border-top:1px solid #334155;
@@ -138,6 +157,7 @@
     </div>
     <div class="row">
       <button id="shuffleBtn">🔀 Shuffle</button>
+      <button id="cardDefine" class="define">📖 Define</button>
     </div>
   </section>
 
@@ -154,6 +174,7 @@
     <div class="opts" id="quizOpts"></div>
     <div class="feedback" id="quizFeedback"></div>
     <div class="row">
+      <button id="quizDefine" class="define" style="visibility:hidden">📖 Define</button>
       <button class="primary" id="quizNext">Next question ▶</button>
     </div>
   </section>
@@ -173,6 +194,9 @@
       <button id="cwHint">💡 Hint</button>
       <button id="cwShow">Show answer</button>
       <button id="cwSkip">Skip ▶</button>
+    </div>
+    <div class="row">
+      <button id="cwDefine" class="define" style="visibility:hidden">📖 Define</button>
     </div>
   </section>
 
@@ -549,6 +573,7 @@ function newQuestion(){
     : '<div class="qclue">'+quizAnswer.c+'</div>';
   $("quizFeedback").textContent = "";
   $("quizNext").style.visibility = "hidden";
+  $("quizDefine").style.visibility = "hidden";
 
   const opts = $("quizOpts");
   opts.innerHTML = "";
@@ -581,6 +606,7 @@ function answer(btn, chosen, options){
     ? '<span style="color:var(--good)">Correct! ✓</span>'
     : '<span style="color:var(--bad)">'+quizAnswer.w+' = '+quizAnswer.c+'</span>';
   $("quizNext").style.visibility = "visible";
+  $("quizDefine").style.visibility = "visible";
 }
 
 $("quizNext").onclick = newQuestion;
@@ -640,6 +666,7 @@ $("resetBtn").onclick = ()=>{
 let cwAnswer = null;     // current {w,c}
 let cwSolved = false;
 let cwReveal = 0;        // how many leading letters are revealed as hints
+let cwAdvanceTimer = null;   // pending auto-advance after a correct solve
 
 function newSpell(){
   cwAnswer = weightedPick();
@@ -654,6 +681,7 @@ function newSpell(){
   $("cwFeedback").textContent = "";
   $("cwShow").disabled = false;
   $("cwHint").disabled = false;
+  $("cwDefine").style.visibility = "hidden";
   buildBoxes();
   renderBoxes();
 }
@@ -693,7 +721,9 @@ function checkSpell(){
     if(cwReveal < cwAnswer.w.length){ rec(cwAnswer.w).right++; saveState(); }  // not a full give-up
     renderBoxes("good");
     $("cwFeedback").innerHTML = '<span style="color:var(--good)">Correct! ✓</span>';
-    setTimeout(()=>{ if(cwSolved){ newSpell(); $("cwInput").focus(); } }, 850);  // auto-advance, keep keyboard
+    $("cwDefine").style.visibility = "visible";
+    // auto-advance (keeping the keyboard up) unless the user opens the dictionary
+    cwAdvanceTimer = setTimeout(()=>{ if(cwSolved){ newSpell(); $("cwInput").focus(); } }, 1600);
   } else {
     renderBoxes("bad");
     $("cwFeedback").innerHTML = '<span style="color:var(--bad)">Not quite — keep trying</span>';
@@ -735,9 +765,78 @@ $("cwShow").onclick = ()=>{
   rec(cwAnswer.w).wrong++; saveState();
   renderBoxes();
   $("cwFeedback").innerHTML = '<span style="color:var(--hard)">'+cwAnswer.w+' — '+cwAnswer.c+'</span>';
+  $("cwDefine").style.visibility = "visible";
 };
 
 $("cwSkip").onclick = ()=>{ newSpell(); $("cwInput").focus(); };
+
+/* ---------- dictionary lookup (shared across modes) ---------- */
+let defCache = {};
+try{ defCache = JSON.parse(localStorage.getItem("cw_defs_v1")) || {}; }catch(e){}
+function saveDefs(){ try{ localStorage.setItem("cw_defs_v1", JSON.stringify(defCache)); }catch(e){} }
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+}
+function clueFor(w){ const x = byWord(w); return x ? x.c : ""; }
+
+function trimDef(data){
+  const out = { phonetic:"", meanings:[] };
+  for(const e of data){
+    if(!out.phonetic && e.phonetic) out.phonetic = e.phonetic;
+    for(const m of (e.meanings || [])){
+      out.meanings.push({
+        pos: m.partOfSpeech || "",
+        defs: (m.definitions || []).slice(0,3).map(d=>d.definition).filter(Boolean)
+      });
+    }
+  }
+  out.meanings = out.meanings.slice(0,4);
+  return out;
+}
+
+function openDefModal(word){ $("defWord").textContent = word; $("defModal").hidden = false; }
+function closeDefModal(){ $("defModal").hidden = true; }
+$("defClose").onclick = closeDefModal;
+$("defModal").onclick = (e)=>{ if(e.target === $("defModal")) closeDefModal(); };
+
+function renderDefinition(d){
+  if(!d.meanings.length){ $("defBody").innerHTML = '<div class="defMsg">No definitions found.</div>'; return; }
+  let h = d.phonetic ? '<div class="defPhon">'+escapeHtml(d.phonetic)+'</div>' : '';
+  d.meanings.forEach(m=>{
+    h += '<div class="defPos">'+escapeHtml(m.pos)+'</div><ol class="defList">';
+    m.defs.forEach(x=>{ h += '<li>'+escapeHtml(x)+'</li>'; });
+    h += '</ol>';
+  });
+  $("defBody").innerHTML = h;
+}
+
+async function showDefinition(word){
+  if(!word) return;
+  if(cwAdvanceTimer){ clearTimeout(cwAdvanceTimer); cwAdvanceTimer = null; }  // don't skip past a defined word
+  openDefModal(word);
+  if(defCache[word]){ renderDefinition(defCache[word]); return; }
+  $("defBody").innerHTML = '<div class="defMsg muted">Looking up…</div>';
+  try{
+    const res = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/"+encodeURIComponent(word.toLowerCase()));
+    if(!res.ok) throw new Error("not found");
+    const data = await res.json();
+    if(!Array.isArray(data)) throw new Error("bad");
+    const d = trimDef(data);
+    if(!d.meanings.length) throw new Error("empty");
+    defCache[word] = d; saveDefs();
+    renderDefinition(d);
+  }catch(e){
+    $("defBody").innerHTML =
+      '<div class="defMsg">No dictionary entry for <b>'+escapeHtml(word)+'</b>.'+
+      '<br><span class="muted">Many crossword answers are proper nouns or abbreviations. '+
+      'Its crossword clue: “'+escapeHtml(clueFor(word))+'”.</span></div>';
+  }
+}
+
+$("cardDefine").onclick = ()=> showDefinition(currentCardWord());
+$("quizDefine").onclick = ()=>{ if(quizAnswer) showDefinition(quizAnswer.w); };
+$("cwDefine").onclick   = ()=>{ if(cwAnswer)   showDefinition(cwAnswer.w);   };
 
 /* ---------- boot ---------- */
 renderCard();
@@ -747,5 +846,15 @@ if("serviceWorker" in navigator){
   window.addEventListener("load", ()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));
 }
 </script>
+
+<div id="defModal" class="modal" hidden>
+  <div class="sheet">
+    <div class="sheetHead">
+      <span id="defWord"></span>
+      <button id="defClose" aria-label="Close">✕</button>
+    </div>
+    <div id="defBody"></div>
+  </div>
+</div>
 </body>
 </html>

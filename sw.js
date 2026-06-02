@@ -1,6 +1,6 @@
 // Service worker — network-first for the app shell so pushed updates land
 // immediately, with a cache fallback for offline use.
-const CACHE = 'cw-flashcards-v2';
+const CACHE = 'cw-flashcards-v3';
 const ASSETS = [
   './',
   './index.html',
